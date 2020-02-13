@@ -73,8 +73,6 @@ During build, platforms MUST use the same set of mixins for the run image as wer
 
 ### Build Image
 
-The platform MUST execute the detection and build phases of the lifecycle on the build image.
-
 The platform MUST ensure that:
 
 - The image config's `User` field is set to a non-root user with a writable home directory.
@@ -84,36 +82,7 @@ The platform MUST ensure that:
 - The image config's `Label` field has the label `io.buildpacks.stack.id` set to the stack ID.
 - The image config's `Label` field has the label `io.buildpacks.stack.mixins` set to a JSON array containing mixin names for each mixin applied to the image.
 
-To initiate the detection phase, the platform MUST invoke the `/cnb/lifecycle/detector` executable with the user and environment defined in the build image config.
-Invoking this executable with no flags is equivalent to the following invocation including all accepted flags and their default values.
-
-```bash
-/cnb/lifecycle/detector -buildpacks /cnb/by-id -order /cnb/order.toml -group ./group.toml -plan ./plan.toml
-```
-
-Where:
-
-- `-buildpacks` MUST specify input from a buildpacks directory as defined in the [Buildpacks Directory Layout](#buildpacks-directory-layout) section.
-- `-order` MUST specify input from an overriding `order.toml` file path as defined in the [Data Format](#data-format) section.
-- `-group` MUST specify output to a `group.toml` file path as defined in the [Data Format](#data-format) section.
-- `-plan` MUST specify output to a Build Plan as defined in the [Buildpack Interface Specification](buildpack.md).
-
-To initiate the build phase, the platform MUST invoke the `/cnb/lifecycle/builder` executable with the user and environment defined in the build image config.
-Invoking this executable with no flags is equivalent to the following invocation including all accepted flags and their default values.
-
-```bash
-/cnb/lifecycle/builder -buildpacks /cnb/by-id -group ./group.toml -plan ./plan.toml
-```
-
-Where:
-
-- `-buildpacks` MUST specify input from a buildpacks directory as defined in the [Buildpacks Directory Layout](#buildpacks-directory-layout) section.
-- `-group` MUST specify input from a `group.toml` file path as defined in the [Data Format](#data-format) section.
-- `-plan` MUST specify input from a Build Plan as defined in the [Buildpack Interface Specification](buildpack.md).
-
 ### Run Image
-
-The platform MUST provide the lifecycle with a reference to the run image during the export phase.
 
 The platform MUST ensure that:
 
@@ -134,6 +103,153 @@ A platform MAY support any number of mixins for a given stack in order to suppor
 
 Changes introduced by mixins SHOULD be restricted to the addition of operating system software packages that are regularly patched with strictly backwards-compatible security fixes.
 However, mixins MAY consist of any changes that follow the [Compatibility Guarantees](#compatibility-guarantees).
+
+## Lifecycle Interface
+
+A lifecycle 
+
+The following specifies the interface implemented by executables in each buildpack.
+
+### Key
+
+| Mark    | Meaning
+|---------|-------------------------------------------
+| O       | Path to which output should be written
+| P       | Path from which input should be read
+| I(T)    | Image (tag) reference
+| R       | Read-only
+
+
+This executable MUST resolve input values according to the following rules:
+* When both a flag it's correspond environment variable are provided, the executable:
+  - MUST assume the input to be the argument to the flag and ignore environment variable
+* When neither a flag nor it's corresponding environment are provided, the executable:
+  - MUST assume the input to be the default value
+
+### Detection
+Executable: 
+```
+/cnb/lifecycle/detector \
+  [-buildpacks <buildpacksR>] \
+  [-app <app>] \
+  [-platform <platformR>] \
+  [-order <orderP>] \
+  [-group <orderO>] \
+  [-plan <planO>] \
+  [-log-level <planO>] \
+```
+
+| Input        | Flag           | Env                 | Default Value   | Description
+|--------------|----------------|---------------------|-----------------|----------------------
+| <buildpacks> | -buildpacks    | CNB_BUILDPACKS_DIR  | /cnb/buildpacks | Path to buildpacks directory (see [Buildpacks Directory Layout](#buildpacks-directory-layout))
+| <app>        | -app           | CNB_APP_DIR         | /workspace      | Path to application directory
+| <platform>   | -platform      | CNB_PLATFORM_DIR    | /platform       | Path to platform directory
+| <order>      | -order         | CNB_ORDER_PATH      | ./order.toml    | Path to order definition ( see [order.toml (TOML)](#order.toml-(toml)))
+| <group>      | -group         | CNB_GROUP_PATH      | ./group.toml    | Path to output group file ( see [group.toml (TOML)](#group.toml-(toml)))
+| <plan>       | -plan          | CNB_PLAN_PATH       | ./plan.toml     | Path to output build plan file ( see  data format in [Buildpack Interface Specification](buildpack.md))
+
+| Output             | Description
+|--------------------|----------------------------------------------
+| [exit status]      | Pass (0), fail (100), or error (1-99, 101+)
+| `/dev/stdout`      | Logs (info)
+| `/dev/stderr`      | Logs (warnings, errors)
+| `<group>`          | Detected buildpack group
+| `<plan>`           | Build Plan of detector group
+
+### Analysis
+Executable: `/cnb/lifecycle/analyzer <image>`
+
+This executable MUST resolve the input values according to the following rules:
+* When both a flag it's correspond environment variable are provided, the executable:
+  - MUST assume the input to be the argument to the flag and ignore environment variable
+* When neither a flag nor it's corresponding environment are provided, the executable:
+  - MUST assume the input to be the default value
+  
+`/cnb/lifecycle/analyzer` MUST accept the following inputs
+
+| Input          | Flag           | Env                 | Default Value   | Description
+|----------------|----------------|---------------------|-----------------|----------------------
+| `<group>`      | -group         | CNB_GROUP_PATH      | ./group.toml    | Path to group definition ( see [group.toml (TOML)](#group.toml-(toml)))
+| `<layers>`     | -layers        | CNB_LAYERS_DIR      | /layers         | Path to layer directory
+| `<skip-layers>`| -skip-layers   | CNB_SKIP_LAYERS     | false           | Do not write layer metadata
+| `<analyzed>`   | -analyzed      | CNB_ANALYZED_PATH   | ./analyzed.toml | Path to output analysis metadata ( see [analyzed.toml (TOML)](#analyzed.toml-(toml))
+| `<use-daemon>` | -daemon        | CNB_USE_DAEMON      | false           | Read image config blob from docker daemon
+| `<cache-dir>`  | -daemon        | CNB_CACHE_DIR       | /cache          | Location of cache directory
+| `<uid>`        | -uid           | CNB_USER_ID         | -               | User that build phase will run as
+| `<gid>`        | -gid           | CNB_GROUP_ID        | -               | Group of user that build phase will run as
+
+`/cnb/lifecycle/analyzer` MAY accept additional inputs to support other cache implementations
+
+### Cache Restoration
+Executable: `/cnb/lifecycle/restorer`
+
+This executable MUST resolve the input values according to the following rules:
+* When both a flag it's correspond environment variable are provided, the executable:
+  - MUST assume the input to be the argument to the flag and ignore environment variable
+* When neither a flag nor it's corresponding environment are provided, the executable:
+  - MUST assume the input to be the default value
+  
+`/cnb/lifecycle/restorer` MUST accept the following inputs
+
+| Input        | Flag           | Env                 | Default Value   | Description
+|--------------|----------------|---------------------|-----------------|----------------------
+| <group>      | -group         | CNB_GROUP_PATH      | ./group.toml    | Path to group definition ( see [group.toml (TOML)](#group.toml-(toml)))
+| <layers>     | -layers        | CNB_LAYERS_DIR      | /layers         | Path to layer directory
+| <cache-dir>  | -daemon        | CNB_CACHE_DIR       | /cache          | Location of cache directory
+| <uid>        | -uid           | CNB_USER_ID         | -               | User that build phase will run as
+| <gid>        | -gid           | CNB_GROUP_ID        | -               | Group of user that build phase will run as
+
+`/cnb/lifecycle/restorer` MAY accept additional inputs to support other cache implementations
+
+### Build
+Executable: `/cnb/lifecycle/builder`
+
+This executable MUST resolve input values according to the following rules:
+* When both a flag it's correspond environment variable are provided, the executable:
+  - MUST assume the input to be the argument to the flag and ignore environment variable
+* When neither a flag nor it's corresponding environment are provided, the executable:
+  - MUST assume the input to be the default value
+
+| Input        | Flag           | Env                 | Default Value   | Description
+|--------------|----------------|---------------------|-----------------|----------------------
+| <buildpacks> | -buildpacks    | CNB_BUILDPACKS_DIR  | /cnb/buildpacks | Path to buildpacks directory (see [Buildpacks Directory Layout](#buildpacks-directory-layout))
+| <app>        | -app           | CNB_APP_DIR         | /workspace      | Path to application directory
+| <layers>     | -layers        | CNB_LAYERS_DIR      | /layers         | Path to layer directory
+| <platform>   | -platform      | CNB_PLATFORM_DIR    | /platform       | Path to platform directory
+| <group>      | -group         | CNB_GROUP_PATH      | ./group.toml    | Path to group file ( see [group.toml (TOML)](#group.toml-(toml)))
+| <plan>       | -plan          | CNB_PLAN_PATH       | ./plan.toml     | Path to output build plan file ( see  data format in [Buildpack Interface Specification](buildpack.md))
+
+
+### Export
+Executable: `/cnb/lifecycle/exporter <image>`
+
+This executable MUST resolve input values according to the following rules:
+* When both a flag it's correspond environment variable are provided, the executable:
+  - MUST assume the input to be the argument to the flag and ignore environment variable
+* When neither a flag nor it's corresponding environment are provided, the executable:
+  - MUST assume the input to be the default value
+
+| Input        | Flag           | Env                 | Default Value   | Description
+|--------------|----------------|---------------------|-----------------|----------------------
+| <group>      | -group         | CNB_GROUP_PATH      | ./group.toml    | Path to group definition ( see [group.toml (TOML)](#group.toml-(toml)))
+| <layers>     | -layers        | CNB_LAYERS_DIR      | /layers         | Path to layer directory
+| <skip-layers>| -skip-layers   | CNB_SKIP_LAYERS     | false           | Do not write layer metadata
+| <analyzed>   | -analyzed      | CNB_ANALYZED_PATH   | ./analyzed.toml | Path to output analysis metadata ( see [analyzed.toml (TOML)](#analyzed.toml-(toml))
+| <use-daemon> | -daemon        | CNB_USE_DAEMON      | false           | Read image config blob from docker daemon
+| <cache-dir>  | -daemon        | CNB_CACHE_DIR       | /cache          | Location of cache directory
+| <uid>        | -uid           | CNB_USER_ID         | -               | User that build phase will run as
+| <gid>        | -gid           | CNB_GROUP_ID        | -               | Group of user that build phase will run as
+
+## Build
+
+To create an app OCI image a platform MUST invoke the following executables in order in the build environment
+
+1. `/cnb/lifecycle/detector`
+1. `/cnb/lifecycle/analyzer`
+1. `/cnb/lifecycle/restorer`
+1. `/cnb/lifecycle/builder`
+1. `/cnb/lifecycle/exporter`
+
 
 ## Buildpacks
 
@@ -232,5 +348,44 @@ Where:
 - all present `run-image-mirrors`:
   * MUST resolve to a digest reference identical to that which `run-image.image` resolves
   * MUST NOT refer to the same registry as does `run-image.image` or any other entries `run-image.mirrors`
+
+### layer metadata label (JSON)
+```json
+{
+  "app": [
+    {"sha": "<slice-layer-diffID>"}
+  ],
+  "config": {
+    "sha": "<config-layer-diffID>"
+  },
+  "launcher": {
+    "sha": "<launcher-layer-diffID>"
+  },
+  "buildpacks": [
+    {
+      "key": "<buldpack-id>",
+      "version": "<buildpack-version>",
+      "layers": {
+        "<layer-name>": {
+          "sha": "<layer-diffID>",
+          "data": <layer-metadata>,
+          "build": false,
+          "launch": false,
+          "cache": false
+        }
+      }
+    }
+  ],
+  "runImage": {
+    "topLayer": "<run-image-top-layer-diffID>",
+    "reference": "<run-image-reference>"
+  },
+  "stack": {
+    "runImage": {
+      "image": "cnbs/sample-stack-run:bionic"
+    }
+  }
+}
+```
 
 
